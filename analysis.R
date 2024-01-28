@@ -1,7 +1,21 @@
 setwd("~/Dropbox (University of Oregon)/effort_data/")
 source("load_prep_data.R")
 data = load_data()
-
+library(ggplot2)
+d = aggregate(risk~LL+Participant.Private.ID,data,mean)
+ggplot(d,aes(x=factor(LL),y=risk,fill=factor(LL)))+
+  geom_bar(stat="summary",position="dodge")+
+  geom_jitter(width=0.1,shape=21,col="black",size=2)+
+  scale_fill_manual(values=c("blue","red"))+
+  theme(text=element_text(size=20))+
+  scale_y_continuous(limits = c(0,1.01),expand= c(0,0))+
+  theme(legend.position = "None")+
+  ylab("likelihood of gambling")+
+  scale_x_discrete(labels=c("chose no effort","chose effort"))+
+  xlab("")+
+  geom_errorbar(stat="summary",position="dodge",width=0.15,linewidth=1.5)+
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+        panel.background = element_blank(), axis.line = element_line(colour = "black"))
 ############################################################
 ############################################################
 ############################################################
@@ -17,10 +31,10 @@ source("models.R")
 rh0=rexpo=p0=hboid=h0=qh=gh=expo=
   rgh=rhboid=rp0=rqh=list()
 ## vector for number of trials per subject
-ntrials = c()
+ntrials = versions = effort_selfreport = c()
 bics = matrix(0,length(S),12) # matrix for bic scores
 new_df = rep(NA,6) # dataframe for trial-unique discounts
-
+S = unique(data$Participant.Private.ID)
 for(s in 1:length(S)){
   ix = data[data$Participant.Private.ID==S[s],]
   ix = ix[!is.na(ix$effortChoice),]
@@ -28,7 +42,6 @@ for(s in 1:length(S)){
   ntrials[s] = nrow(ix)
   versions[s] = ix$version[1]
   effort_selfreport[s] = ix$effortSelfReport[1]
-  happy_selfreport[s] = ix$happySelfReport[1]
   if(versions[s]==3) ix$X1 = -ix$X1
   for(n in 1:nrow(ix)){
     ix$s2_u[n] = max(1e-5,var(c(ix$X1[1:n],ix$X2[1:n]),na.rm=T))
@@ -77,7 +90,7 @@ for(s in 1:length(S)){
                               rh0_k))
   
 }
-
+colnames(new_df) = c("sub","risk","LL","version","selfreport","rh0_k")
 # mean & sd of each model
 colMeans(bics);apply(bics,2,sd)
 
@@ -241,7 +254,7 @@ cor.test(parm_recov$actualLL[parm_recov$framing==3],parm_recov$simLL[parm_recov$
 ############################################################
 ############################################################
 ############################################################
-
+library(lme4)
 ###########################################################################
 #mixed model
 mm1a = lmerTest::lmer(risk~LL*factor(version)+(1+LL|Participant.Private.ID),data,REML=F)
@@ -253,13 +266,29 @@ mm1boot <- bootMer(mm1a, FUN_bootMer,
 mixedCI=confint(mm1boot)
 
 #simple model
+HE = aggregate(LL~Participant.Private.ID,data,mean)
+risk = aggregate(risk~Participant.Private.ID,data,mean)
+df = data.frame(HE=HE$LL,risk=risk$risk,versions=versions)
 lm1 = lm(risk~HE*versions,df)#positive group level effect
 lm1Cs=summary(lm1)
-
+bs_coef_he = bs_coef_v = bs_coef_he_v = c()
+for(i in 1:1000){
+  sample_d = df
+  sample_d$HE = sample(sample_d$HE)
+  sample_d$risk = sample(sample_d$risk)
+  model_bootstrap <- lm(risk ~ HE*versions, data = sample_d)
+  bs_coef_he = c(bs_coef_he, model_bootstrap$coefficients[2])
+  bs_coef_v = c(bs_coef_v, model_bootstrap$coefficients[3])
+  bs_coef_he_v = c(bs_coef_he_v, model_bootstrap$coefficients[4])
+}
+simple_model_lb = c(NA,lm1Cs$coefficients[2]-2*sd(bs_coef_he),lm1Cs$coefficients[3]-2*sd(bs_coef_v),
+                    lm1Cs$coefficients[4]-2*sd(bs_coef_he_v))
+simple_model_ub = c(NA,lm1Cs$coefficients[2]+2*sd(bs_coef_he),lm1Cs$coefficients[3]+2*sd(bs_coef_v),
+                    lm1Cs$coefficients[4]+2*sd(bs_coef_he_v))
 #plot effects
 plot_models = data.frame(coefs = c(mm1aCs$coefficients[,1],lm1Cs$coefficients[,1]),
-                         LB = c(mixedCI[,1],lm1Cs$coefficients[,1]-lm1Cs$coefficients[,2]),
-                         UB = c(mixedCI[,2],lm1Cs$coefficients[,1]+lm1Cs$coefficients[,2]),
+                         LB = c(mixedCI[,1],simple_model_lb),
+                         UB = c(mixedCI[,2],simple_model_ub),
                          predictor = rep(c("intercept","high-effort",
                                        "framing","effort x framing"),2),
                          model = rep(c("mixed","simple"),each=4))
@@ -274,7 +303,7 @@ p100=ggplot(plot_models,aes(x=coefs,y=predictor,fill=model))+
   theme(legend.position = c(0.75,0.5))+
   scale_fill_manual(values=c("gray","white"))+
   theme(text=element_text(size=20))
-
+p100
 ggsave(plot=p100,filename="paradox.png",units="px",width=2000,height=1400,
        path="~/Dropbox (University of Oregon)/effort_data/plots/")
 
@@ -292,6 +321,8 @@ for(i in 1:length(S)){ ## get framing group per subject
   d = data[data$Participant.Private.ID==S[i],]
   versions[i] = d$version[1]
 }
+rexpo_beta = unlist(lapply(rexpo,function(x) x$par[1]))
+rexpo_alpha = unlist(lapply(rexpo,function(x) x$par[2]))
 df = data.frame(HE = LE$LL,risk = risky$risk,
                 beta = rexpo_beta, alpha = rexpo_alpha,
                 sr = sr$effortSelfReport,
@@ -320,10 +351,23 @@ mixedCI2=confint(mm3boot)
 
 lm2 = lm(risk~k*framing,df)
 lm2Cs=summary(lm2)
-
+bs_coef_he = bs_coef_v = bs_coef_he_v = c()
+for(i in 1:1000){
+  sample_d = df
+  sample_d$HE = sample(sample_d$k)
+  sample_d$risk = sample(sample_d$risk)
+  model_bootstrap <- lm(risk ~ k*versions, data = sample_d)
+  bs_coef_he = c(bs_coef_he, model_bootstrap$coefficients[2])
+  bs_coef_v = c(bs_coef_v, model_bootstrap$coefficients[3])
+  bs_coef_he_v = c(bs_coef_he_v, model_bootstrap$coefficients[4])
+}
+simple_model_lb = c(NA,lm2Cs$coefficients[2]-2*sd(bs_coef_he),lm2Cs$coefficients[3]-2*sd(bs_coef_v),
+                    lm2Cs$coefficients[4]-2*sd(bs_coef_he_v))
+simple_model_ub = c(NA,lm2Cs$coefficients[2]+2*sd(bs_coef_he),lm2Cs$coefficients[3]+2*sd(bs_coef_v),
+                    lm2Cs$coefficients[4]+2*sd(bs_coef_he_v))
 plot_models2 = data.frame(coefs = c(mm3Cs$coefficients[,1],lm2Cs$coefficients[,1]),
-                         LB = c(mixedCI2[,1],lm2Cs$coefficients[,1]-lm2Cs$coefficients[,2]),
-                         UB = c(mixedCI2[,2],lm2Cs$coefficients[,1]+lm2Cs$coefficients[,2]),
+                          LB = c(mixedCI2[,1],simple_model_lb),
+                          UB = c(mixedCI2[,2],simple_model_ub),
                          predictor = rep(c("intercept","high-effort",
                                            "framing","effort x framing"),2),
                          model = rep(c("mixed","simple"),each=4))
